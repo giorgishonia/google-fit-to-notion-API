@@ -234,7 +234,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
 
 async function updateNotion(date, data) {
   try {
-    console.log(Updating Notion for date ${date} with data:, data);
+    console.log(`Updating Notion for date ${date} with data:`, data);
 
     const response = await notion.databases.query({
       database_id: databaseId,
@@ -276,16 +276,16 @@ async function updateNotion(date, data) {
         page_id: response.results[0].id,
         properties,
       });
-      console.log(Updated existing entry for ${date} (${dayName}));
+      console.log(`Updated existing entry for ${date} (${dayName})`);
     } else {
       await notion.pages.create({
         parent: { database_id: databaseId },
         properties,
       });
-      console.log(Created new entry for ${date} (${dayName}));
+      console.log(`Created new entry for ${date} (${dayName})`);
     }
   } catch (err) {
-    console.error(Error updating Notion for date ${date}:, err);
+    console.error(`Error updating Notion for date ${date}:`, err);
     throw err;
   }
 }
@@ -314,14 +314,14 @@ async function syncData() {
 
 // Routes
 app.get("/", (req, res) => {
-  res.send(
+  res.send(`
     <h1>Google Fit to Notion Sync</h1>
     <p>Status: ${
       oauth2Client.credentials ? "Authenticated" : "Not authenticated"
     }</p>
     <p><a href="/auth">Authenticate with Google Fit</a></p>
     <p><a href="/sync">Trigger manual sync</a></p>
-  );
+  `);
 });
 
 app.get("/auth", (req, res) => {
@@ -379,9 +379,9 @@ async function startApp() {
   }
 
   app.listen(port, () => {
-    console.log(Server running at http://localhost:${port});
+    console.log(`Server running at http://localhost:${port}`);
     if (!hasCredentials) {
-      console.log(Please visit http://localhost:${port}/auth to authenticate);
+      console.log(`Please visit http://localhost:${port}/auth to authenticate`);
     }
   });
 }
