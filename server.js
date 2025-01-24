@@ -1,17 +1,18 @@
 const express = require("express");
 const { google } = require("googleapis");
 const dotenv = require("dotenv");
-const cors = require("cors");
+const { Client } = require("@notionhq/client");
 const fs = require("fs").promises;
 const path = require("path");
 
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = 3000;
 
-app.use(cors());
-app.use(express.json());
+// Initialize Notion client
+const notion = new Client({ auth: process.env.NOTION_TOKEN });
+const databaseId = process.env.NOTION_DATABASE_ID;
 
 // Token file path
 const TOKEN_PATH = path.join(__dirname, "token.json");
@@ -20,7 +21,7 @@ const TOKEN_PATH = path.join(__dirname, "token.json");
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  process.env.REDIRECT_URI
+  "http://localhost:3000/auth/callback"
 );
 
 // Scopes for accessing Google Fit data
@@ -29,6 +30,21 @@ const SCOPES = [
   "https://www.googleapis.com/auth/fitness.location.read",
   "https://www.googleapis.com/auth/fitness.body.read",
 ];
+
+// Function to get day name
+function getDayName(dateString) {
+  const days = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
+  const date = new Date(dateString);
+  return days[date.getDay()];
+}
 
 // Function to load saved tokens
 async function loadSavedCredentials() {
@@ -52,6 +68,7 @@ async function saveCredentials(tokens) {
   }
 }
 
+// Function to fetch Google Fit data
 async function fetchFitnessData(startTimeMillis, endTimeMillis) {
   const fitness = google.fitness({ version: "v1", auth: oauth2Client });
 
@@ -216,63 +233,117 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
   return dailyData;
 }
 
-// Routes
-app.get("/api/fitness-data", async (req, res) => {
+async function updateNotion(date, data) {
   try {
-    const hasCredentials = await loadSavedCredentials();
-    if (!hasCredentials) {
-      return res.status(401).json({ error: "Not authenticated" });
-    }
+    console.log(`Updating Notion for date ${date} with data:`, data);
 
+    const response = await notion.databases.query({
+      database_id: databaseId,
+      filter: {
+        property: "Date",
+        date: {
+          equals: date,
+        },
+      },
+    });
+
+    const dayName = getDayName(date);
+
+    const properties = {
+      Day: {
+        title: [
+          {
+            text: {
+              content: dayName,
+            },
+          },
+        ],
+      },
+      Date: { date: { start: date } },
+      Steps: { number: parseInt(data.steps) },
+      Distance: { number: parseFloat(data.distance) },
+      Calories: {
+        rich_text: [{ text: { content: String(parseInt(data.calories)) } }],
+      },
+      "Active Minutes": {
+        rich_text: [
+          { text: { content: String(parseInt(data.activeMinutes)) } },
+        ],
+      },
+    };
+
+    if (response.results.length > 0) {
+      await notion.pages.update({
+        page_id: response.results[0].id,
+        properties,
+      });
+      console.log(`Updated existing entry for ${date} (${dayName})`);
+    } else {
+      await notion.pages.create({
+        parent: { database_id: databaseId },
+        properties,
+      });
+      console.log(`Created new entry for ${date} (${dayName})`);
+    }
+  } catch (err) {
+    console.error(`Error updating Notion for date ${date}:`, err);
+    throw err;
+  }
+}
+
+// Sync function for auto sync
+async function syncData() {
+  try {
+    console.log("Starting sync...");
     const endTimeMillis = Date.now();
-    const startTimeMillis = endTimeMillis - 30 * 24 * 60 * 60 * 1000; // Last 30 days
+    const startDate = new Date("2025-01-15T00:00:00Z");
+    const startTimeMillis = startDate.getTime();
 
     const dailyData = await fetchFitnessData(startTimeMillis, endTimeMillis);
-    res.json(dailyData);
-  } catch (error) {
-    console.error("Error fetching fitness data:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+    console.log("Fetched data:", dailyData);
 
-app.get("/auth", (req, res) => {
-  const authUrl = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope: SCOPES,
-    prompt: "consent", // Force prompt to ensure we get refresh token
-  });
-  res.redirect(authUrl);
-});
+    for (const [date, data] of Object.entries(dailyData)) {
+      await updateNotion(date, data);
+    }
 
-app.get("/auth/callback", async (req, res) => {
-  try {
-    const { tokens } = await oauth2Client.getToken(req.query.code);
-    oauth2Client.setCredentials(tokens);
-    await saveCredentials(tokens);
-    res.send("Authentication successful!");
+    console.log("Sync completed successfully");
   } catch (err) {
-    console.error("Error during authentication:", err);
-    res.status(500).send("Authentication failed.");
+    console.error("Error during sync:", err);
+  }
+}
+
+// Routes
+app.get("/", (req, res) => {
+  res.send(`
+    <h1>Google Fit to Notion Sync</h1>
+    <p>Status: ${
+      oauth2Client.credentials ? "Authenticated" : "Not authenticated"
+    }</p>
+    <p><a href="/auth">Authenticate with Google Fit</a></p>
+    <p><a href="/sync">Trigger manual sync</a></p>
+    <p><a href="/sync-auto">Trigger auto sync (every 5 mins)</a></p>
+  `);
+});
+
+app.get("/sync-auto", async (req, res) => {
+  try {
+    await syncData();
+    res.send("Sync completed successfully");
+  } catch (err) {
+    console.error("Error during auto sync:", err);
+    res.status(500).send("Sync failed.");
   }
 });
 
 // Start the application
 async function startApp() {
   const hasCredentials = await loadSavedCredentials();
-
   if (hasCredentials) {
-    console.log("Loaded saved credentials");
-  } else {
-    console.log(
-      "No saved credentials found. Please authenticate at /auth endpoint"
-    );
+    setInterval(syncData, 5 * 60 * 1000); // Run sync every 5 minutes
   }
 
   app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
-    if (!hasCredentials) {
-      console.log(`Please visit http://localhost:${port}/auth to authenticate`);
-    }
   });
 }
 
