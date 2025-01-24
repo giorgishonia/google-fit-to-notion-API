@@ -1,3 +1,4 @@
+// Import required modules (you already have this)
 const express = require("express");
 const { google } = require("googleapis");
 const dotenv = require("dotenv");
@@ -73,7 +74,6 @@ async function saveCredentials(tokens) {
 async function fetchFitnessData(startTimeMillis, endTimeMillis) {
   const fitness = google.fitness({ version: "v1", auth: oauth2Client });
 
-  // Separate requests for each data type to ensure we get all data
   const requests = [
     // Steps request
     fitness.users.dataset.aggregate({
@@ -152,7 +152,6 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
     // Process and combine the data
     const dailyData = {};
 
-    // Helper function to process each bucket and update dailyData
     const processBucketData = (bucket, type, valueType, multiplier = 1) => {
       const date = new Date(parseInt(bucket.startTimeMillis))
         .toISOString()
@@ -170,28 +169,21 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
       if (type === "steps") {
         dailyData[date].steps = value;
       } else if (type === "distance") {
-        dailyData[date].distance = Math.round((value / 1000) * 100) / 100; // Convert to km
+        dailyData[date].distance = Math.round((value / 1000) * 100) / 100;
       } else if (type === "calories") {
         dailyData[date].calories = Math.round(value);
       }
     };
 
-    // Process steps
     stepsResponse.data.bucket.forEach((bucket) =>
       processBucketData(bucket, "steps", "intVal")
     );
-
-    // Process distance
     distanceResponse.data.bucket.forEach((bucket) =>
       processBucketData(bucket, "distance", "fpVal")
     );
-
-    // Process calories
     caloriesResponse.data.bucket.forEach((bucket) =>
       processBucketData(bucket, "calories", "fpVal")
     );
-
-    // Process active minutes
     activeMinutesResponse.data.bucket.forEach((bucket) => {
       const date = new Date(parseInt(bucket.startTimeMillis))
         .toISOString()
@@ -207,7 +199,6 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
 
       let activeMinutes = 0;
       bucket.dataset[0]?.point?.forEach((point) => {
-        // Filter for specific activity types contributing to active minutes
         if (
           point.value[0]?.intVal === 72 || // Running
           point.value[0]?.intVal === 7 || // Walking
@@ -219,7 +210,6 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
         }
       });
 
-      // Ensure that active minutes are realistic and capped at 1440 minutes per day
       if (activeMinutes > 1440) {
         activeMinutes = 1440; // Cap at 1440 minutes (maximum minutes in a day)
       }
@@ -290,6 +280,41 @@ async function updateNotion(date, data) {
     throw err;
   }
 }
+
+async function syncData() {
+  try {
+    console.log("Starting sync...");
+    const endTimeMillis = Date.now();
+    const startDate = new Date("2025-01-15T00:00:00Z");
+    const startTimeMillis = startDate.getTime();
+
+    const dailyData = await fetchFitnessData(startTimeMillis, endTimeMillis);
+
+    for (const date in dailyData) {
+      await updateNotion(date, dailyData[date]);
+    }
+  } catch (err) {
+    console.error("Sync failed:", err);
+  }
+}
+
+// POST endpoint to trigger manual sync or update
+app.post("/sync", async (req, res) => {
+  try {
+    await syncData();
+    res.status(200).send("Data synced successfully");
+  } catch (error) {
+    res.status(500).send("Failed to sync data");
+  }
+});
+
+// Use cron jobs for periodic sync
+cron.schedule("0 0 * * *", syncData);
+
+// Start the server
+app.listen(port, () => {
+  console.log(`Server is running on http://localhost:${port}`);
+});
 
 async function syncData() {
   try {
