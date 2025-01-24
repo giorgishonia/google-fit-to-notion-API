@@ -8,20 +8,20 @@ const path = require("path");
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000; // Use the environment port for production
+const port = 3000;
 
 // Initialize Notion client
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 const databaseId = process.env.NOTION_DATABASE_ID;
 
-// Token storage: This should be moved to a more persistent storage, like a database in production.
+// Token file path
 const TOKEN_PATH = path.join(__dirname, "token.json");
 
 // Initialize Google OAuth2 client
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  `https://${process.env.RENDER_URL}/auth/callback` // Replace with your Render app's URL
+  "http://localhost:3000/auth/callback"
 );
 
 // Scopes for accessing Google Fit data
@@ -71,7 +71,9 @@ async function saveCredentials(tokens) {
 async function fetchFitnessData(startTimeMillis, endTimeMillis) {
   const fitness = google.fitness({ version: "v1", auth: oauth2Client });
 
+  // Separate requests for each data type to ensure we get all data
   const requests = [
+    // Steps request
     fitness.users.dataset.aggregate({
       userId: "me",
       requestBody: {
@@ -87,6 +89,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
         endTimeMillis,
       },
     }),
+    // Distance request
     fitness.users.dataset.aggregate({
       userId: "me",
       requestBody: {
@@ -102,6 +105,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
         endTimeMillis,
       },
     }),
+    // Calories request
     fitness.users.dataset.aggregate({
       userId: "me",
       requestBody: {
@@ -117,6 +121,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
         endTimeMillis,
       },
     }),
+    // Active minutes request
     fitness.users.dataset.aggregate({
       userId: "me",
       requestBody: {
@@ -141,8 +146,10 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
     activeMinutesResponse,
   ] = await Promise.all(requests);
 
+  // Process and combine the data
   const dailyData = {};
 
+  // Process steps
   stepsResponse.data.bucket.forEach((bucket) => {
     const date = new Date(parseInt(bucket.startTimeMillis))
       .toISOString()
@@ -159,6 +166,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
     dailyData[date].steps = steps;
   });
 
+  // Process distance
   distanceResponse.data.bucket.forEach((bucket) => {
     const date = new Date(parseInt(bucket.startTimeMillis))
       .toISOString()
@@ -172,9 +180,10 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
       };
 
     const distance = bucket.dataset[0]?.point?.[0]?.value?.[0]?.fpVal || 0;
-    dailyData[date].distance = Math.round((distance / 1000) * 100) / 100;
+    dailyData[date].distance = Math.round((distance / 1000) * 100) / 100; // Convert to km
   });
 
+  // Process calories
   caloriesResponse.data.bucket.forEach((bucket) => {
     const date = new Date(parseInt(bucket.startTimeMillis))
       .toISOString()
@@ -191,6 +200,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
     dailyData[date].calories = Math.round(calories);
   });
 
+  // Process active minutes
   activeMinutesResponse.data.bucket.forEach((bucket) => {
     const date = new Date(parseInt(bucket.startTimeMillis))
       .toISOString()
@@ -206,13 +216,14 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
     let activeMinutes = 0;
     bucket.dataset[0]?.point?.forEach((point) => {
       if (
-        point.value[0]?.intVal === 72 ||
-        point.value[0]?.intVal === 7 ||
+        point.value[0]?.intVal === 72 || // Running
+        point.value[0]?.intVal === 7 || // Walking
         point.value[0]?.intVal === 8
       ) {
+        // Biking
         const duration =
           parseInt(point.endTimeNanos) - parseInt(point.startTimeNanos);
-        activeMinutes += Math.round(duration / (60 * 1000000000));
+        activeMinutes += Math.round(duration / (60 * 1000000000)); // Convert nanos to minutes
       }
     });
     dailyData[date].activeMinutes = activeMinutes;
@@ -223,11 +234,15 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
 
 async function updateNotion(date, data) {
   try {
+    console.log(Updating Notion for date ${date} with data:, data);
+
     const response = await notion.databases.query({
       database_id: databaseId,
       filter: {
         property: "Date",
-        date: { equals: date },
+        date: {
+          equals: date,
+        },
       },
     });
 
@@ -235,14 +250,24 @@ async function updateNotion(date, data) {
 
     const properties = {
       Day: {
-        title: [{ text: { content: dayName } }],
+        title: [
+          {
+            text: {
+              content: dayName,
+            },
+          },
+        ],
       },
       Date: { date: { start: date } },
       Steps: { number: parseInt(data.steps) },
       Distance: { number: parseFloat(data.distance) },
-      Calories: { rich_text: [{ text: { content: String(parseInt(data.calories)) } }] },
+      Calories: {
+        rich_text: [{ text: { content: String(parseInt(data.calories)) } }],
+      },
       "Active Minutes": {
-        rich_text: [{ text: { content: String(parseInt(data.activeMinutes)) } }],
+        rich_text: [
+          { text: { content: String(parseInt(data.activeMinutes)) } },
+        ],
       },
     };
 
@@ -251,29 +276,37 @@ async function updateNotion(date, data) {
         page_id: response.results[0].id,
         properties,
       });
+      console.log(Updated existing entry for ${date} (${dayName}));
     } else {
       await notion.pages.create({
         parent: { database_id: databaseId },
         properties,
       });
+      console.log(Created new entry for ${date} (${dayName}));
     }
   } catch (err) {
-    console.error("Error updating Notion:", err);
+    console.error(Error updating Notion for date ${date}:, err);
     throw err;
   }
 }
 
 async function syncData() {
   try {
+    console.log("Starting sync...");
     const endTimeMillis = Date.now();
+    // Set start time to January 15th, 2025
     const startDate = new Date("2025-01-15T00:00:00Z");
     const startTimeMillis = startDate.getTime();
 
     const dailyData = await fetchFitnessData(startTimeMillis, endTimeMillis);
 
+    console.log("Fetched data:", dailyData);
+
     for (const [date, data] of Object.entries(dailyData)) {
       await updateNotion(date, data);
     }
+
+    console.log("Sync completed successfully");
   } catch (err) {
     console.error("Error during sync:", err);
   }
@@ -281,19 +314,21 @@ async function syncData() {
 
 // Routes
 app.get("/", (req, res) => {
-  res.send(`
+  res.send(
     <h1>Google Fit to Notion Sync</h1>
-    <p>Status: ${oauth2Client.credentials ? "Authenticated" : "Not authenticated"}</p>
+    <p>Status: ${
+      oauth2Client.credentials ? "Authenticated" : "Not authenticated"
+    }</p>
     <p><a href="/auth">Authenticate with Google Fit</a></p>
     <p><a href="/sync">Trigger manual sync</a></p>
-  `);
+  );
 });
 
 app.get("/auth", (req, res) => {
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: "offline",
     scope: SCOPES,
-    prompt: "consent",
+    prompt: "consent", // Force prompt to ensure we get refresh token
   });
   res.redirect(authUrl);
 });
@@ -307,8 +342,11 @@ app.get("/auth/callback", async (req, res) => {
     // Perform initial sync after authentication
     await syncData();
 
-    res.send("Authentication successful! Initial sync completed.");
+    res.send(
+      "Authentication successful! Initial sync completed. The application will now sync automatically daily."
+    );
   } catch (err) {
+    console.error("Error during authentication:", err);
     res.status(500).send("Authentication failed.");
   }
 });
@@ -316,13 +354,36 @@ app.get("/auth/callback", async (req, res) => {
 app.get("/sync", async (req, res) => {
   try {
     await syncData();
-    res.send("Sync completed successfully!");
+    res.send("Manual sync completed successfully");
   } catch (err) {
-    res.status(500).send("Error syncing data.");
+    console.error("Error during manual sync:", err);
+    res.status(500).send("Sync failed.");
   }
 });
 
-// Start server
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+// Start the application
+async function startApp() {
+  const hasCredentials = await loadSavedCredentials();
+
+  if (hasCredentials) {
+    console.log("Loaded saved credentials");
+    // Perform initial sync on startup
+    await syncData();
+
+    // Set up daily sync
+    setInterval(syncData, 24 * 60 * 60 * 1000);
+  } else {
+    console.log(
+      "No saved credentials found. Please authenticate at /auth endpoint"
+    );
+  }
+
+  app.listen(port, () => {
+    console.log(Server running at http://localhost:${port});
+    if (!hasCredentials) {
+      console.log(Please visit http://localhost:${port}/auth to authenticate);
+    }
+  });
+}
+
+startApp();
