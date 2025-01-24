@@ -234,8 +234,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
 
 async function updateNotion(date, data) {
   try {
-    console.log(`Updating Notion for date ${date} with data:`, data);
-
+console.log(`Updating Notion for date ${date} with data:`, data);
     const response = await notion.databases.query({
       database_id: databaseId,
       filter: {
