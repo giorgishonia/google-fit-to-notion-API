@@ -23,7 +23,7 @@ const TOKEN_PATH = path.join(__dirname, "token.json");
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  "http://localhost:3000/auth/callback"
+  "https://google-fit-to-notion-api.onrender.com/auth/callback"
 );
 
 // Scopes for accessing Google Fit data
@@ -466,9 +466,13 @@ async function startApp() {
   }
 
   const server = app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
+    console.log(
+      `Server running at https://google-fit-to-notion-api.onrender.com`
+    );
     if (!hasCredentials) {
-      console.log(`Please visit http://localhost:${port}/auth to authenticate`);
+      console.log(
+        `Please visit https://google-fit-to-notion-api.onrender.com/auth to authenticate`
+      );
     }
   });
 
