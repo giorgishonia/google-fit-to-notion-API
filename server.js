@@ -4,6 +4,8 @@ const dotenv = require("dotenv");
 const { Client } = require("@notionhq/client");
 const fs = require("fs").promises;
 const path = require("path");
+const cron = require("node-cron");
+const WebSocket = require("ws");
 
 dotenv.config();
 
@@ -139,97 +141,97 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
     }),
   ];
 
-  const [
-    stepsResponse,
-    distanceResponse,
-    caloriesResponse,
-    activeMinutesResponse,
-  ] = await Promise.all(requests);
+  try {
+    const [
+      stepsResponse,
+      distanceResponse,
+      caloriesResponse,
+      activeMinutesResponse,
+    ] = await Promise.all(requests);
 
-  // Process and combine the data
-  const dailyData = {};
+    // Process and combine the data
+    const dailyData = {};
 
-  // Process steps
-  stepsResponse.data.bucket.forEach((bucket) => {
-    const date = new Date(parseInt(bucket.startTimeMillis))
-      .toISOString()
-      .split("T")[0];
-    if (!dailyData[date])
-      dailyData[date] = {
-        steps: 0,
-        distance: 0,
-        calories: 0,
-        activeMinutes: 0,
-      };
-
-    const steps = bucket.dataset[0]?.point?.[0]?.value?.[0]?.intVal || 0;
-    dailyData[date].steps = steps;
-  });
-
-  // Process distance
-  distanceResponse.data.bucket.forEach((bucket) => {
-    const date = new Date(parseInt(bucket.startTimeMillis))
-      .toISOString()
-      .split("T")[0];
-    if (!dailyData[date])
-      dailyData[date] = {
-        steps: 0,
-        distance: 0,
-        calories: 0,
-        activeMinutes: 0,
-      };
-
-    const distance = bucket.dataset[0]?.point?.[0]?.value?.[0]?.fpVal || 0;
-    dailyData[date].distance = Math.round((distance / 1000) * 100) / 100; // Convert to km
-  });
-
-  // Process calories
-  caloriesResponse.data.bucket.forEach((bucket) => {
-    const date = new Date(parseInt(bucket.startTimeMillis))
-      .toISOString()
-      .split("T")[0];
-    if (!dailyData[date])
-      dailyData[date] = {
-        steps: 0,
-        distance: 0,
-        calories: 0,
-        activeMinutes: 0,
-      };
-
-    const calories = bucket.dataset[0]?.point?.[0]?.value?.[0]?.fpVal || 0;
-    dailyData[date].calories = Math.round(calories);
-  });
-
-  // Process active minutes
-  activeMinutesResponse.data.bucket.forEach((bucket) => {
-    const date = new Date(parseInt(bucket.startTimeMillis))
-      .toISOString()
-      .split("T")[0];
-    if (!dailyData[date])
-      dailyData[date] = {
-        steps: 0,
-        distance: 0,
-        calories: 0,
-        activeMinutes: 0,
-      };
-
-    let activeMinutes = 0;
-    bucket.dataset[0]?.point?.forEach((point) => {
-      if (
-        point.value[0]?.intVal === 72 || // Running
-        point.value[0]?.intVal === 7 || // Walking
-        point.value[0]?.intVal === 8
-      ) {
-        // Biking
-        const duration =
-          parseInt(point.endTimeNanos) - parseInt(point.startTimeNanos);
-        activeMinutes += Math.round(duration / (60 * 1000000000)); // Convert nanos to minutes
+    // Helper function to process each bucket and update dailyData
+    const processBucketData = (bucket, type, valueType, multiplier = 1) => {
+      const date = new Date(parseInt(bucket.startTimeMillis))
+        .toISOString()
+        .split("T")[0];
+      if (!dailyData[date]) {
+        dailyData[date] = {
+          steps: 0,
+          distance: 0,
+          calories: 0,
+          activeMinutes: 0,
+        };
       }
-    });
-    dailyData[date].activeMinutes = activeMinutes;
-  });
 
-  return dailyData;
+      const value = bucket.dataset[0]?.point?.[0]?.value?.[0]?.[valueType] || 0;
+      if (type === "steps") {
+        dailyData[date].steps = value;
+      } else if (type === "distance") {
+        dailyData[date].distance = Math.round((value / 1000) * 100) / 100; // Convert to km
+      } else if (type === "calories") {
+        dailyData[date].calories = Math.round(value);
+      }
+    };
+
+    // Process steps
+    stepsResponse.data.bucket.forEach((bucket) =>
+      processBucketData(bucket, "steps", "intVal")
+    );
+
+    // Process distance
+    distanceResponse.data.bucket.forEach((bucket) =>
+      processBucketData(bucket, "distance", "fpVal")
+    );
+
+    // Process calories
+    caloriesResponse.data.bucket.forEach((bucket) =>
+      processBucketData(bucket, "calories", "fpVal")
+    );
+
+    // Process active minutes
+    activeMinutesResponse.data.bucket.forEach((bucket) => {
+      const date = new Date(parseInt(bucket.startTimeMillis))
+        .toISOString()
+        .split("T")[0];
+      if (!dailyData[date]) {
+        dailyData[date] = {
+          steps: 0,
+          distance: 0,
+          calories: 0,
+          activeMinutes: 0,
+        };
+      }
+
+      let activeMinutes = 0;
+      bucket.dataset[0]?.point?.forEach((point) => {
+        // Filter for specific activity types contributing to active minutes
+        if (
+          point.value[0]?.intVal === 72 || // Running
+          point.value[0]?.intVal === 7 || // Walking
+          point.value[0]?.intVal === 8 // Biking
+        ) {
+          const duration =
+            parseInt(point.endTimeNanos) - parseInt(point.startTimeNanos);
+          activeMinutes += Math.round(duration / (60 * 1000000000)); // Convert nanos to minutes
+        }
+      });
+
+      // Ensure that active minutes are realistic and capped at 1440 minutes per day
+      if (activeMinutes > 1440) {
+        activeMinutes = 1440; // Cap at 1440 minutes (maximum minutes in a day)
+      }
+
+      dailyData[date].activeMinutes = activeMinutes;
+    });
+
+    return dailyData;
+  } catch (error) {
+    console.error("Error fetching fitness data:", error);
+    throw new Error("Failed to fetch fitness data");
+  }
 }
 
 async function updateNotion(date, data) {
@@ -312,16 +314,75 @@ async function syncData() {
   }
 }
 
-// Routes
+// WebSocket server for real-time updates
+const wss = new WebSocket.Server({ noServer: true });
+
+wss.on("connection", (ws) => {
+  console.log("Client connected");
+
+  // Send authentication status immediately upon connection
+  sendAuthStatus(ws);
+
+  // Send countdown timer updates
+  const timerInterval = setInterval(() => {
+    sendCountdown(ws);
+  }, 1000);
+
+  ws.on("close", () => {
+    clearInterval(timerInterval);
+    console.log("Client disconnected");
+  });
+});
+
+function sendAuthStatus(ws) {
+  ws.send(
+    JSON.stringify({
+      type: "authStatus",
+      isAuthenticated: !!oauth2Client.credentials,
+    })
+  );
+}
+
+function sendCountdown(ws) {
+  const now = new Date();
+  const nextUpdate = new Date(now);
+  nextUpdate.setHours(23, 55, 0, 0);
+  if (now > nextUpdate) nextUpdate.setDate(nextUpdate.getDate() + 1);
+
+  const timeLeft = nextUpdate.getTime() - now.getTime();
+  const hours = Math.floor(timeLeft / (1000 * 60 * 60));
+  const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+  const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
+
+  ws.send(
+    JSON.stringify({
+      type: "countdown",
+      timeLeft: `${hours.toString().padStart(2, "0")}:${minutes
+        .toString()
+        .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`,
+    })
+  );
+}
+
+cron.schedule("55 23 * * *", async () => {
+  console.log("Scheduled sync started at 11:55 PM...");
+  try {
+    await syncData();
+    console.log("Scheduled sync completed successfully.");
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ type: "syncCompleted" }));
+      }
+    });
+  } catch (err) {
+    console.error("Error during scheduled sync:", err);
+  }
+});
+
+app.use(express.static(path.join(__dirname, "public")));
+
 app.get("/", (req, res) => {
-  res.send(`
-    <h1>Google Fit to Notion Sync</h1>
-    <p>Status: ${
-      oauth2Client.credentials ? "Authenticated" : "Not authenticated"
-    }</p>
-    <p><a href="/auth">Authenticate with Google Fit</a></p>
-    <p><a href="/sync">Trigger manual sync</a></p>
-  `);
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 app.get("/auth", (req, res) => {
@@ -361,6 +422,33 @@ app.get("/sync", async (req, res) => {
   }
 });
 
+app.get("/api/fitness-data", async (req, res) => {
+  try {
+    // Set fixed start time to January 15, 2025
+    const startDate = new Date("2025-01-15T00:00:00Z");
+    const startTimeMillis = startDate.getTime();
+
+    // Set end time to the current time
+    const endTimeMillis = Date.now();
+
+    // Fetch fitness data from January 15, 2025, to now
+    const fitnessData = await fetchFitnessData(startTimeMillis, endTimeMillis);
+
+    res.json({
+      status: "success",
+      message: "Fitness data retrieved successfully",
+      data: fitnessData,
+    });
+  } catch (err) {
+    console.error("Error fetching fitness data:", err);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to retrieve fitness data",
+      error: err.message,
+    });
+  }
+});
+
 // Start the application
 async function startApp() {
   const hasCredentials = await loadSavedCredentials();
@@ -378,11 +466,17 @@ async function startApp() {
     );
   }
 
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
     if (!hasCredentials) {
       console.log(`Please visit http://localhost:${port}/auth to authenticate`);
     }
+  });
+
+  server.on("upgrade", (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
   });
 }
 
