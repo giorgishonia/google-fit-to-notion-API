@@ -17,7 +17,10 @@
     </div>
 
     <script>
-      const ws = new WebSocket("ws://" + window.location.host);
+      // Use secure WebSocket connection based on the page protocol
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${protocol}//${window.location.host}`);
+
       const statusElement = document.getElementById("status");
       const countdownElement = document.getElementById("countdown");
       const syncButton = document.getElementById("syncButton");
@@ -39,6 +42,12 @@
           alert("Sync completed successfully!");
           fetchLatestData();
         }
+      };
+
+      ws.onerror = (error) => {
+        console.error("WebSocket error:", error);
+        countdownElement.textContent =
+          "WebSocket connection error. Please refresh the page.";
       };
 
       syncButton.addEventListener("click", () => {
