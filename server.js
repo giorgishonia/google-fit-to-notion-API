@@ -108,7 +108,7 @@ const TOKEN_PATH = path.join(__dirname, "token.json");
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  "https://google-fit-to-notion-api.onrender.com/auth/callback"
+  "https://google-fit-to-notion-api.onrender.com/auth/callbackflowName=GeneralOAuthFlowk"
 );
 
 const SCOPES = [
