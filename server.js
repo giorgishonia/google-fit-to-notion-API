@@ -4,8 +4,7 @@ const dotenv = require("dotenv");
 const { Client } = require("@notionhq/client");
 const fs = require("fs").promises;
 const path = require("path");
-const cron = require("node-cron");
-const WebSocket = require("ws");
+const cron = require("node-cron"); // Import node-cron
 
 dotenv.config();
 
@@ -23,7 +22,7 @@ const TOKEN_PATH = path.join(__dirname, "token.json");
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  "https://google-fit-to-notion-api.onrender.com/auth/callback"
+  "http://localhost:3000/auth/callback"
 );
 
 // Scopes for accessing Google Fit data
@@ -314,244 +313,40 @@ async function syncData() {
   }
 }
 
-// WebSocket server for real-time updates
-//const wss = new WebSocket.Server({ noServer: true });
+// Schedule the sync at specific times
+cron.schedule("0 12,15,18,21,0 * * *", async () => {
+  console.log("Running scheduled sync...");
+  await syncData();
+});
 
-// Modify the server creation and WebSocket setup
+cron.schedule("35 5 * * *", async () => {
+  console.log("Running sync at 05:26");
+  await syncData();
+});
+
+// Routes
+app.get("/", (req, res) => {
+  res.send(`...`);
+});
+
+// Start the application
 async function startApp() {
   const hasCredentials = await loadSavedCredentials();
 
   if (hasCredentials) {
     console.log("Loaded saved credentials");
+
+    // Perform initial sync on startup
     await syncData();
-    setInterval(syncData, 24 * 60 * 60 * 1000);
+
+    app.listen(port, () => {
+      console.log(`Server running at http://localhost:${port}`);
+    });
   } else {
     console.log(
       "No saved credentials found. Please authenticate at /auth endpoint"
     );
   }
-
-  // Create HTTPS server if SSL certificates are available
-  let server;
-
-  if (process.env.NODE_ENV === "production") {
-    // For production, let the proxy (like Nginx) handle HTTPS
-    server = app.listen(port, () => {
-      console.log(
-        `Server running at https://google-fit-to-notion-api.onrender.com`
-      );
-      if (!hasCredentials) {
-        console.log(
-          `Please visit https://google-fit-to-notion-api.onrender.com/auth to authenticate`
-        );
-      }
-    });
-  } else {
-    // For local development
-    server = app.listen(port, () => {
-      console.log(
-        `Server running at https://google-fit-to-notion-api.onrender.com`
-      );
-      if (!hasCredentials) {
-        console.log(
-          `Please visit https://google-fit-to-notion-api.onrender.com/auth to authenticate`
-        );
-      }
-    });
-  }
-
-  // Set up WebSocket server with proper SSL handling
-  const wss = new WebSocket.Server({
-    server,
-    // Add these options for better security
-    clientTracking: true,
-    perMessageDeflate: {
-      zlibDeflateOptions: {
-        chunkSize: 1024,
-        memLevel: 7,
-        level: 3,
-      },
-      zlibInflateOptions: {
-        chunkSize: 10 * 1024,
-      },
-      // Other options
-      serverNoContextTakeover: true,
-      clientNoContextTakeover: true,
-      serverMaxWindowBits: 10,
-      concurrencyLimit: 10,
-    },
-  });
-
-  // WebSocket connection handling
-  wss.on("connection", (ws, req) => {
-    console.log("Client connected from:", req.socket.remoteAddress);
-
-    // Send authentication status immediately upon connection
-    sendAuthStatus(ws);
-
-    // Set up ping-pong to keep connection alive
-    ws.isAlive = true;
-    ws.on("pong", () => {
-      ws.isAlive = true;
-    });
-
-    // Send countdown timer updates
-    const timerInterval = setInterval(() => {
-      if (ws.isAlive) {
-        sendCountdown(ws);
-      }
-    }, 1000);
-
-    ws.on("close", () => {
-      clearInterval(timerInterval);
-      ws.isAlive = false;
-      console.log("Client disconnected");
-    });
-
-    ws.on("error", (error) => {
-      console.error("WebSocket error:", error);
-      clearInterval(timerInterval);
-      ws.isAlive = false;
-    });
-  });
-
-  // Set up ping interval to check for stale connections
-  const pingInterval = setInterval(() => {
-    wss.clients.forEach((ws) => {
-      if (ws.isAlive === false) {
-        return ws.terminate();
-      }
-      ws.isAlive = false;
-      ws.ping(() => {});
-    });
-  }, 30000);
-
-  wss.on("close", () => {
-    clearInterval(pingInterval);
-  });
-
-  // Handle server upgrade for WebSocket
-  server.on("upgrade", (request, socket, head) => {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit("connection", ws, request);
-    });
-  });
 }
 
-function sendAuthStatus(ws) {
-  ws.send(
-    JSON.stringify({
-      type: "authStatus",
-      isAuthenticated: !!oauth2Client.credentials,
-    })
-  );
-}
-
-function sendCountdown(ws) {
-  const now = new Date();
-  const nextUpdate = new Date(now);
-  nextUpdate.setHours(23, 55, 0, 0);
-  if (now > nextUpdate) nextUpdate.setDate(nextUpdate.getDate() + 1);
-
-  const timeLeft = nextUpdate.getTime() - now.getTime();
-  const hours = Math.floor(timeLeft / (1000 * 60 * 60));
-  const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
-  const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
-
-  ws.send(
-    JSON.stringify({
-      type: "countdown",
-      timeLeft: `${hours.toString().padStart(2, "0")}:${minutes
-        .toString()
-        .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`,
-    })
-  );
-}
-
-cron.schedule("55 23 * * *", async () => {
-  console.log("Scheduled sync started at 11:55 PM...");
-  try {
-    await syncData();
-    console.log("Scheduled sync completed successfully.");
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ type: "syncCompleted" }));
-      }
-    });
-  } catch (err) {
-    console.error("Error during scheduled sync:", err);
-  }
-});
-
-app.use(express.static(path.join(__dirname, "public")));
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-
-app.get("/auth", (req, res) => {
-  const authUrl = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    scope: SCOPES,
-    prompt: "consent", // Force prompt to ensure we get refresh token
-  });
-  res.redirect(authUrl);
-});
-
-app.get("/auth/callback", async (req, res) => {
-  try {
-    const { tokens } = await oauth2Client.getToken(req.query.code);
-    oauth2Client.setCredentials(tokens);
-    await saveCredentials(tokens);
-
-    // Perform initial sync after authentication
-    await syncData();
-
-    res.send(
-      "Authentication successful! Initial sync completed. The application will now sync automatically daily."
-    );
-  } catch (err) {
-    console.error("Error during authentication:", err);
-    res.status(500).send("Authentication failed.");
-  }
-});
-
-app.get("/sync", async (req, res) => {
-  try {
-    await syncData();
-    res.send("Manual sync completed successfully");
-  } catch (err) {
-    console.error("Error during manual sync:", err);
-    res.status(500).send("Sync failed.");
-  }
-});
-
-app.get("/api/fitness-data", async (req, res) => {
-  try {
-    // Set fixed start time to January 15, 2025
-    const startDate = new Date("2025-01-15T00:00:00Z");
-    const startTimeMillis = startDate.getTime();
-
-    // Set end time to the current time
-    const endTimeMillis = Date.now();
-
-    // Fetch fitness data from January 15, 2025, to now
-    const fitnessData = await fetchFitnessData(startTimeMillis, endTimeMillis);
-
-    res.json({
-      status: "success",
-      message: "Fitness data retrieved successfully",
-      data: fitnessData,
-    });
-  } catch (err) {
-    console.error("Error fetching fitness data:", err);
-    res.status(500).json({
-      status: "error",
-      message: "Failed to retrieve fitness data",
-      error: err.message,
-    });
-  }
-});
-
-// Start the application
 startApp();
