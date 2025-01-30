@@ -154,7 +154,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
 
   // Process steps
   stepsResponse.data.bucket.forEach((bucket) => {
-    const date = new Date(parseInt(bucket.startTimeMillis))
+    const date = new Date(Number.parseInt(bucket.startTimeMillis))
       .toISOString()
       .split("T")[0];
     if (!dailyData[date])
@@ -170,7 +170,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
 
   // Process distance
   distanceResponse.data.bucket.forEach((bucket) => {
-    const date = new Date(parseInt(bucket.startTimeMillis))
+    const date = new Date(Number.parseInt(bucket.startTimeMillis))
       .toISOString()
       .split("T")[0];
     if (!dailyData[date])
@@ -186,7 +186,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
 
   // Process calories
   caloriesResponse.data.bucket.forEach((bucket) => {
-    const date = new Date(parseInt(bucket.startTimeMillis))
+    const date = new Date(Number.parseInt(bucket.startTimeMillis))
       .toISOString()
       .split("T")[0];
     if (!dailyData[date])
@@ -203,7 +203,7 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
 
   // Process active minutes
   activeMinutesResponse.data.bucket.forEach((bucket) => {
-    const date = new Date(parseInt(bucket.startTimeMillis))
+    const date = new Date(Number.parseInt(bucket.startTimeMillis))
       .toISOString()
       .split("T")[0];
     if (!dailyData[date])
@@ -222,7 +222,8 @@ async function fetchFitnessData(startTimeMillis, endTimeMillis) {
       ) {
         // Biking
         const duration =
-          parseInt(point.endTimeNanos) - parseInt(point.startTimeNanos);
+          Number.parseInt(point.endTimeNanos) -
+          Number.parseInt(point.startTimeNanos);
         activeMinutes += Math.round(duration / (60 * 1000000000));
       }
     });
@@ -259,14 +260,16 @@ async function updateNotion(date, data) {
         ],
       },
       Date: { date: { start: date } },
-      Steps: { number: parseInt(data.steps) },
-      Distance: { number: parseFloat(data.distance) },
+      Steps: { number: Number.parseInt(data.steps) },
+      Distance: { number: Number.parseFloat(data.distance) },
       Calories: {
-        rich_text: [{ text: { content: String(parseInt(data.calories)) } }],
+        rich_text: [
+          { text: { content: String(Number.parseInt(data.calories)) } },
+        ],
       },
       "Active Minutes": {
         rich_text: [
-          { text: { content: String(parseInt(data.activeMinutes)) } },
+          { text: { content: String(Number.parseInt(data.activeMinutes)) } },
         ],
       },
     };
@@ -355,6 +358,15 @@ app.get("/api/user", async (req, res) => {
   } catch (error) {
     console.error("Error fetching user profile:", error);
     res.status(500).json({ error: "Failed to fetch user profile" });
+  }
+});
+
+app.get("/api/latest-data", async (req, res) => {
+  try {
+    const latestData = await fetchLatestData();
+    res.json(latestData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -580,6 +592,12 @@ style="width: 0%">
     </html>
   `);
 });
+
+async function fetchLatestData() {
+  // Implement this function to fetch the latest data from your database or cache
+  // For now, we'll return an empty object
+  return {};
+}
 
 // Start the application
 async function startApp() {
