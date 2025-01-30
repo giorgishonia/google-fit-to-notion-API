@@ -26,7 +26,7 @@ const TOKEN_PATH = path.join(__dirname, "token.json");
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  "http://localhost:3000/auth/callback"
+  "https://google-fit-to-notion-api.onrender.com/auth/callback"
 );
 
 const SCOPES = [
@@ -592,7 +592,9 @@ async function startApp() {
     await syncData();
 
     app.listen(port, () => {
-      console.log(`Server running at http://localhost:${port}`);
+      console.log(
+        `Server running at https://google-fit-to-notion-api.onrender.com`
+      );
     });
   } else {
     console.log(
@@ -600,7 +602,9 @@ async function startApp() {
     );
 
     app.listen(port, () => {
-      console.log(`Server running at http://localhost:${port}`);
+      console.log(
+        `Server running at https://google-fit-to-notion-api.onrender.com`
+      );
       console.log("Please visit /auth to authenticate with Google Fit");
     });
   }
